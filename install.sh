@@ -42,7 +42,20 @@ curl -fLo ~/.vim/autoload/plug.vim --create-dirs \
     https://raw.githubusercontent.com/junegunn/vim-plug/master/plug.vim
 
 # colorscheme (base16)
-git clone https://github.com/chriskempson/base16-shell.git ~/.config/base16-shell
+BASE16_DIR="$HOME/.config/base16-shell"
+BASE16_REPOSITORY="https://github.com/chriskempson/base16-shell.git"
+
+if [ -d "$BASE16_DIR/.git" ]; then
+  echo "Update base16-shell"
+  git -C "$BASE16_DIR" pull --ff-only
+elif [ -e "$BASE16_DIR" ]; then
+  echo "ERROR: $BASE16_DIR exists but is not a Git repository." >&2
+  exit 1
+else
+  echo "Clone base16-shell"
+  mkdir -p "$(dirname "$BASE16_DIR")"
+  git clone "$BASE16_REPOSITORY" "$BASE16_DIR"
+fi
 
 # Rust tools
 #apt-install cargo
