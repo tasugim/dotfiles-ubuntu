@@ -2,8 +2,6 @@
 
 set -Eeuo pipefail
 
-export DEBIAN_FRONTEND=noninteractive
-
 readonly DOTDIR="$(
   cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
   pwd -P
@@ -11,10 +9,6 @@ readonly DOTDIR="$(
 
 readonly BASE16_DIR="${HOME}/.config/base16-shell"
 readonly BASE16_REPOSITORY="https://github.com/chriskempson/base16-shell.git"
-
-# trueにするとEmacs用PPAを追加する。
-# Ubuntu標準のEmacsでよければfalseに変更する。
-readonly ENABLE_EMACS_PPA="${ENABLE_EMACS_PPA:-true}"
 
 log() {
   printf '[dotfiles] %s\n' "$*"
@@ -26,7 +20,9 @@ error() {
 
 on_error() {
   local exit_code=$?
+
   error "Installation failed at line ${BASH_LINENO[0]} (exit code: ${exit_code})"
+
   exit "$exit_code"
 }
 
@@ -42,15 +38,19 @@ require_command() {
 }
 
 check_prerequisites() {
-  require_command git
-  require_command curl
-  require_command sudo
-  require_command dpkg-query
+  local commands=(
+    curl
+    find
+    git
+    mktemp
+    readlink
+  )
 
-  if ! sudo -n true >/dev/null 2>&1; then
-    error "Passwordless sudo is required."
-    return 1
-  fi
+  local command_name
+
+  for command_name in "${commands[@]}"; do
+    require_command "$command_name"
+  done
 }
 
 backup_existing_path() {
@@ -77,6 +77,7 @@ create_dotfile_link() {
   dotfile_name="$(basename -- "$source_path")"
   target_path="${HOME}/${dotfile_name}"
 
+  # Gitリポジトリの管理ファイルはリンクしない。
   case "$dotfile_name" in
     .git | .gitignore | .gitattributes | .gitmodules | .github)
       log "Skipping repository metadata: ${dotfile_name}"
@@ -84,7 +85,7 @@ create_dotfile_link() {
       ;;
   esac
 
-  # 期待するリンクがすでに存在する場合は何もしない。
+  # 期待するシンボリックリンクがすでに存在する場合は何もしない。
   if [[ -L "$target_path" ]]; then
     current_link="$(readlink -- "$target_path")"
 
@@ -94,13 +95,18 @@ create_dotfile_link() {
     fi
   fi
 
-  # 通常ファイル、ディレクトリ、異なるリンクは削除せずバックアップする。
+  # 既存ファイル、ディレクトリ、異なるリンクは削除せず退避する。
   if [[ -e "$target_path" || -L "$target_path" ]]; then
     backup_existing_path "$target_path"
   fi
 
   log "Creating link: ${target_path} -> ${source_path}"
-  ln --symbolic -- "$source_path" "$target_path"
+
+  ln \
+    --symbolic \
+    -- \
+    "$source_path" \
+    "$target_path"
 }
 
 create_dotfile_links() {
@@ -121,87 +127,6 @@ create_dotfile_links() {
   log "END create dotfile links"
 }
 
-package_is_installed() {
-  local package="$1"
-
-  dpkg-query \
-    --show \
-    --showformat='${db:Status-Abbrev}' \
-    "$package" 2>/dev/null \
-    | grep --quiet '^ii '
-}
-
-configure_emacs_repository() {
-  if [[ "$ENABLE_EMACS_PPA" != "true" ]]; then
-    log "Emacs PPA is disabled"
-    return 0
-  fi
-
-  if grep \
-      --recursive \
-      --silent \
-      --fixed-strings \
-      "ppa.launchpadcontent.net/ubuntuhandbook1/emacs" \
-      /etc/apt/sources.list \
-      /etc/apt/sources.list.d 2>/dev/null; then
-    log "Emacs PPA is already configured"
-    return 0
-  fi
-
-  if ! command -v add-apt-repository >/dev/null 2>&1; then
-    error "add-apt-repository is not installed."
-    error "Install software-properties-common in the Dockerfile."
-    return 1
-  fi
-
-  log "Adding Emacs PPA"
-
-  sudo -n env DEBIAN_FRONTEND=noninteractive \
-    add-apt-repository \
-    --yes \
-    ppa:ubuntuhandbook1/emacs
-}
-
-install_apt_packages() {
-  local packages=(
-    git
-    tig
-    tmux
-    vim
-    emacs-nox
-    stow
-  )
-
-  local missing_packages=()
-  local package
-
-  for package in "${packages[@]}"; do
-    if package_is_installed "$package"; then
-      log "Package already installed: ${package}"
-    else
-      missing_packages+=("$package")
-    fi
-  done
-
-  if (( ${#missing_packages[@]} == 0 )); then
-    log "All required apt packages are already installed"
-    return 0
-  fi
-
-  log "Updating apt package index"
-
-  sudo -n env DEBIAN_FRONTEND=noninteractive \
-    apt-get update
-
-  log "Installing packages: ${missing_packages[*]}"
-
-  sudo -n env DEBIAN_FRONTEND=noninteractive \
-    apt-get install \
-    --yes \
-    --no-install-recommends \
-    "${missing_packages[@]}"
-}
-
 download_file() {
   local url="$1"
   local destination="$2"
@@ -209,6 +134,7 @@ download_file() {
   local temporary_file
 
   destination_dir="$(dirname -- "$destination")"
+
   mkdir -p "$destination_dir"
 
   temporary_file="$(mktemp "${destination}.tmp.XXXXXX")"
@@ -223,6 +149,7 @@ download_file() {
       --silent \
       --retry 3 \
       --retry-delay 2 \
+      --retry-connrefused \
       --connect-timeout 15 \
       --max-time 120 \
       --output "$temporary_file" \
@@ -265,10 +192,10 @@ install_or_update_git_repository() {
   if [[ -d "${destination}/.git" ]]; then
     log "Updating Git repository: ${destination}"
 
-    # ローカル変更がある場合は、安全のためpullを実行しない。
+    # ローカル変更がある場合は、上書きせず更新をスキップする。
     if [[ -n "$(git -C "$destination" status --porcelain)" ]]; then
-      error "Local changes found in ${destination}"
-      error "Repository update was skipped."
+      log "Local changes found in ${destination}"
+      log "Repository update was skipped"
       return 0
     fi
 
@@ -291,6 +218,7 @@ install_or_update_git_repository() {
   fi
 
   log "Cloning Git repository: ${repository}"
+
   mkdir -p "$(dirname -- "$destination")"
 
   git clone \
@@ -310,10 +238,6 @@ main() {
 
   check_prerequisites
   create_dotfile_links
-
-  configure_emacs_repository
-  install_apt_packages
-
   install_git_helpers
   install_vim_plug
   install_base16_shell
