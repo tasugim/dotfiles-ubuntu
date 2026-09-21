@@ -124,15 +124,33 @@ if ! shopt -oq posix; then
   fi
 fi
 
-# bash prompt
-if [ -f ~/.git-prompt.sh ]; then
-    source ~/.git-prompt.sh
-fi
-if [ -f ~/.git-completion.sh ]; then
-    source ~/.git-completion.sh
+# Git completion
+GIT_COMPLETION_FILE="$HOME/.local/share/git/git-completion.bash"
+
+if [[ -r "$GIT_COMPLETION_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$GIT_COMPLETION_FILE"
 fi
 
-export PS1='\[\e[1;36m\][\D{%Y/%m/%d} \t] \[\e[1;32m\]\u@\h\[\e[00m\]:\[\e[1;34m\]\w\[\e[1;31m\]$(__git_ps1)\[\e[m\]\n\$ '
+# Git prompt
+GIT_PROMPT_FILE="$HOME/.local/share/git/git-prompt.sh"
+
+if [[ -r "$GIT_PROMPT_FILE" ]]; then
+  # shellcheck disable=SC1090
+  source "$GIT_PROMPT_FILE"
+fi
+
+unset GIT_COMPLETION_FILE
+unset GIT_PROMPT_FILE
+
+export GIT_PS1_SHOWDIRTYSTATE=1
+export GIT_PS1_SHOWSTASHSTATE=1
+export GIT_PS1_SHOWUNTRACKEDFILES=1
+export GIT_PS1_SHOWUPSTREAM="auto"
+
+if declare -F __git_ps1 >/dev/null 2>&1; then
+  PS1='\u@\h:\w$(__git_ps1 " (%s)")\$ '
+fi
 
 # colorscheme (base16)
 # Base16 Shell
